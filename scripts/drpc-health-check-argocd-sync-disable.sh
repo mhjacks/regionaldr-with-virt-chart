@@ -5,6 +5,8 @@ echo "Starting DRPC health check and ArgoCD sync disable job..."
 echo "This job will check DRPC health (Kubernetes objects and PVCs) and disable ArgoCD sync when healthy"
 
 # Configuration from environment variables
+# Target application namespace = pattern-clustergroup (global.pattern + "-" + main.clusterGroupName in values).
+# The chart sets ARGOCD_APP_NAMESPACE and PROTECTED_NAMESPACE to this value.
 DRPC_NAMESPACE="${DRPC_NAMESPACE:-openshift-dr-ops}"
 DRPC_NAME="${DRPC_NAME:-gitops-vm-protection}"
 PROTECTED_NAMESPACE="${PROTECTED_NAMESPACE:-gitops-vms}"
