@@ -1,6 +1,12 @@
 ---
 global:
   clusterDomain: cluster.example.com
+  # Pattern name; target application namespace = global.pattern-main.clusterGroupName
+  pattern: ramendr-starter-kit-hub
+
+# Main cluster group (primary); target application namespace = global.pattern-main.clusterGroupName
+main:
+  clusterGroupName: resilient
 
 # Edge GitOps VMs deployment (script and helm chart)
 edgeGitopsVms:
