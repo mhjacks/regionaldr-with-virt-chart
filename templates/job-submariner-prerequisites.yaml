@@ -22,10 +22,23 @@ spec:
           value: {{ include "rdr.primaryClusterName" . | quote }}
         - name: SECONDARY_CLUSTER
           value: {{ include "rdr.secondaryClusterName" . | quote }}
+        - name: SUBMARINER_BROKER_NAMESPACE
+          value: {{ include "rdr.submarinerBrokerNamespace" . | quote }}
         command:
         - /bin/bash
         - -c
         - |
-{{ .Files.Get "scripts/submariner-prerequisites-check.sh" | indent 10 }}
+{{ include "rdr.ansibleBootstrap" . | indent 10 }}
+            ansible-playbook -i inventory/hosts playbooks/submariner_prerequisites.yml \
+              -e "primary_cluster=${PRIMARY_CLUSTER}" \
+              -e "secondary_cluster=${SECONDARY_CLUSTER}" \
+              -e "submariner_broker_namespace=${SUBMARINER_BROKER_NAMESPACE}"
+        volumeMounts:
+        - name: ansible
+          mountPath: /ansible-cm
+          readOnly: true
+      volumes:
+      - name: ansible
+        configMap:
+          name: regionaldr-ansible
       serviceAccountName: submariner-prerequisites-checker
-

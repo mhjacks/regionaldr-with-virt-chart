@@ -1,0 +1,8 @@
+---
+# DRPC health + disable Argo CD automated sync when healthy.
+# Wait criteria: drpc_max_attempts × drpc_retry_delay_seconds (default 60 × 60s = 1h).
+- name: DRPC health check and Argo CD sync disable
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - drpc_health_check

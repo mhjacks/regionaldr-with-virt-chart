@@ -1,0 +1,155 @@
+---
+- name: Reset per-attempt scratch facts
+  ansible.builtin.set_fact:
+    pvc_positive: false
+    pvc_rep_hint: false
+    kube_obj_positive: false
+
+- name: DRPC attempt {{ drpc_attempt_num }}
+  when: not (drpc_all_passed | default(false))
+  block:
+    - name: Fetch DRPC
+      ansible.builtin.command:
+        argv:
+          - oc
+          - get
+          - drplacementcontrol
+          - "{{ drpc_name }}"
+          - -n
+          - "{{ drpc_namespace }}"
+          - -o
+          - json
+      register: drpc_get
+      changed_when: false
+
+    - name: Parse DRPC document
+      ansible.builtin.set_fact:
+        drpc_doc: "{{ drpc_get.stdout | from_json }}"
+        drpc_phase: "{{ (drpc_get.stdout | from_json).status.phase | default('', true) }}"
+        drpc_conditions: "{{ (drpc_get.stdout | from_json).status.conditions | default([]) }}"
+
+    - name: Require DRPC status conditions
+      ansible.builtin.assert:
+        that:
+          - drpc_conditions | length > 0
+        quiet: true
+
+    - name: PVC and kube checks shortcut when Deployed
+      ansible.builtin.set_fact:
+        pvc_check_ok: true
+        k8s_obj_check_ok: true
+      when: drpc_phase == 'Deployed'
+
+    - name: PVC replication check when not Deployed
+      when: drpc_phase != 'Deployed'
+      block:
+        - name: Fail on unhealthy PVC or volume conditions
+          ansible.builtin.fail:
+            msg: "DRPC condition {{ item.type }}={{ item.status }}"
+          when: >-
+            (item.type is defined) and (
+              ('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type)
+            ) and (item.status | default('') in ['False', 'Unhealthy', 'Failed'])
+          loop: "{{ drpc_conditions }}"
+          loop_control:
+            label: "{{ item.type | default('?') }}"
+
+        - name: Accumulate positive PVC signals
+          ansible.builtin.set_fact:
+            pvc_positive: >-
+              {{ pvc_positive | bool or (
+                (item.type is defined) and (
+                  (('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type))
+                  and (item.status | default('') in ['True', 'Healthy', 'Replicating'])
+                )
+              ) }}
+            pvc_rep_hint: >-
+              {{ pvc_rep_hint | bool or (
+                (item.type is defined) and (
+                  (('Replication' in item.type) or ('Replicating' in item.type))
+                  and (item.status | default('') in ['True', 'Healthy'])
+                )
+              ) }}
+          loop: "{{ drpc_conditions }}"
+
+        - name: Fail on PVC-related False condition (second pass)
+          ansible.builtin.fail:
+            msg: "DRPC PVC error {{ item.type }}={{ item.status }}"
+          when: >-
+            (item.status | default('') == 'False') and (item.type is defined) and (
+              ('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type)
+            )
+          loop: "{{ drpc_conditions }}"
+          loop_control:
+            label: "{{ item.type | default('?') }}"
+
+        - name: Require PVC health signal
+          ansible.builtin.assert:
+            that:
+              - pvc_positive | bool or pvc_rep_hint | bool
+            quiet: true
+
+    - name: Kubernetes object replication check when not Deployed
+      when: drpc_phase != 'Deployed'
+      block:
+        - name: Fail on unhealthy object-related conditions
+          ansible.builtin.fail:
+            msg: "DRPC kube object condition {{ item.type }}={{ item.status }}"
+          when: >-
+            (item.type is defined) and (
+              ('KubeObject' in item.type) or ('Object' in item.type) or
+              ('Replication' in item.type) or ('Replicating' in item.type) or
+              ('Available' in item.type)
+            ) and (item.status | default('') in ['False', 'Unhealthy', 'Failed'])
+          loop: "{{ drpc_conditions }}"
+          loop_control:
+            label: "{{ item.type | default('?') }}"
+
+        - name: Accumulate positive kube object signals
+          ansible.builtin.set_fact:
+            kube_obj_positive: >-
+              {{ kube_obj_positive | bool or (
+                (item.type is defined) and (
+                  ('KubeObject' in item.type) or ('Object' in item.type) or
+                  ('Replication' in item.type) or ('Replicating' in item.type) or
+                  ('Available' in item.type)
+                ) and (item.status | default('') in ['True', 'Healthy', 'Replicating'])
+              ) }}
+          loop: "{{ drpc_conditions }}"
+
+        - name: Fail on object replication False
+          ansible.builtin.fail:
+            msg: "DRPC object error {{ item.type }}"
+          when: >-
+            (item.status | default('') == 'False') and (item.type is defined) and (
+              ('KubeObject' in item.type) or ('Object' in item.type) or
+              ('Replication' in item.type)
+            )
+          loop: "{{ drpc_conditions }}"
+          loop_control:
+            label: "{{ item.type | default('?') }}"
+
+        - name: Require kube object health signal
+          ansible.builtin.assert:
+            that:
+              - kube_obj_positive | bool
+            quiet: true
+
+    - name: Disable Argo CD automated sync
+      ansible.builtin.include_tasks: disable_argocd_sync.yml
+
+    - name: Mark DRPC workflow complete
+      ansible.builtin.set_fact:
+        drpc_all_passed: true
+
+  rescue:
+    - name: Log DRPC attempt failure
+      ansible.builtin.debug:
+        msg: >-
+          DRPC attempt {{ drpc_attempt_num }} failed — retrying after
+          {{ drpc_retry_delay_seconds }}s if attempts remain.
+
+    - name: Wait before next DRPC attempt
+      ansible.builtin.pause:
+        seconds: "{{ drpc_retry_delay_seconds | int }}"
+      when: drpc_attempt_num | int < drpc_max_attempts | int

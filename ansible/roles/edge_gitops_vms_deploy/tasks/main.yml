@@ -1,0 +1,19 @@
+---
+- name: Ensure Edge GitOps work directory
+  ansible.builtin.file:
+    path: /tmp/edge-gitops-vms
+    state: directory
+    mode: "0755"
+
+- name: Copy pattern values into workdir (from mounted ConfigMap)
+  ansible.builtin.copy:
+    src: /tmp/values/values-egv-dr.yaml
+    dest: /tmp/edge-gitops-vms/values-egv-dr.yaml
+    remote_src: true
+
+- name: Run Edge GitOps VMs deployment script
+  ansible.builtin.script: "{{ role_path }}/files/edge-gitops-vms-deploy.sh"
+  environment:
+    PRIMARY_CLUSTER: "{{ primary_cluster }}"
+    SECONDARY_CLUSTER: "{{ secondary_cluster }}"
+    HELM_CHART_VERSION: "{{ helm_chart_version }}"

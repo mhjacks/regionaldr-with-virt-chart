@@ -1,0 +1,82 @@
+---
+- name: Verify Argo CD Application exists
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - applications.argoproj.io
+      - "{{ argocd_app_name }}"
+      - -n
+      - "{{ argocd_app_namespace }}"
+  changed_when: false
+
+- name: Read spec.syncPolicy
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - applications.argoproj.io
+      - "{{ argocd_app_name }}"
+      - -n
+      - "{{ argocd_app_namespace }}"
+      - -o
+      - jsonpath={.spec.syncPolicy}
+  register: sync_policy_raw
+  changed_when: false
+  failed_when: false
+
+- name: Record whether syncPolicy is set
+  ansible.builtin.set_fact:
+    drpc_sync_policy_present: >-
+      {{ (sync_policy_raw.stdout | length > 0) and (sync_policy_raw.stdout != 'null') }}
+
+- name: Read spec.syncPolicy.automated
+  when: drpc_sync_policy_present | bool
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - applications.argoproj.io
+      - "{{ argocd_app_name }}"
+      - -n
+      - "{{ argocd_app_namespace }}"
+      - -o
+      - jsonpath={.spec.syncPolicy.automated}
+  register: automated_raw
+  changed_when: false
+  failed_when: false
+
+- name: Record automated sync absent when syncPolicy missing
+  ansible.builtin.set_fact:
+    drpc_automated_present: false
+  when: not (drpc_sync_policy_present | bool)
+
+- name: Record whether automated sync is enabled (from API)
+  ansible.builtin.set_fact:
+    drpc_automated_present: >-
+      {{ (automated_raw.stdout | length > 0) and (automated_raw.stdout != 'null') }}
+  when: drpc_sync_policy_present | bool
+
+- name: Report sync already disabled
+  ansible.builtin.debug:
+    msg: Argo CD application has no automated sync to remove.
+  when: not (drpc_automated_present | default(false) | bool)
+
+- name: Remove automated sync (JSON patch)
+  when: drpc_automated_present | default(false) | bool
+  ansible.builtin.shell: >-
+    oc patch applications.argoproj.io "{{ argocd_app_name }}"
+    -n "{{ argocd_app_namespace }}"
+    --type=json
+    -p='[{"op": "remove", "path": "/spec/syncPolicy/automated"}]'
+  register: patch_remove
+  changed_when: patch_remove.rc == 0
+  failed_when: false
+
+- name: Merge-patch automated sync null (fallback)
+  when: drpc_automated_present | default(false) | bool and (patch_remove.rc | default(1) != 0)
+  ansible.builtin.shell: >-
+    oc patch applications.argoproj.io "{{ argocd_app_name }}"
+    -n "{{ argocd_app_namespace }}"
+    --type=merge
+    -p='{"spec":{"syncPolicy":{"automated":null}}}'

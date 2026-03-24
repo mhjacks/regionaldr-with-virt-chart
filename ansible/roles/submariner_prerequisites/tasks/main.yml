@@ -1,0 +1,7 @@
+---
+- name: Run Submariner prerequisites check
+  ansible.builtin.script: "{{ role_path }}/files/submariner-prerequisites-check.sh"
+  environment:
+    PRIMARY_CLUSTER: "{{ primary_cluster }}"
+    SECONDARY_CLUSTER: "{{ secondary_cluster }}"
+    SUBMARINER_BROKER_NAMESPACE: "{{ submariner_broker_namespace }}"

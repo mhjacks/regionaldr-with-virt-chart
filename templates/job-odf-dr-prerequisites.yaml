@@ -26,5 +26,16 @@ spec:
         - /bin/bash
         - -c
         - |
-{{ .Files.Get "scripts/odf-dr-prerequisites-check.sh" | indent 10 }}
+{{ include "rdr.ansibleBootstrap" . | indent 10 }}
+            ansible-playbook -i inventory/hosts playbooks/odf_dr_prerequisites.yml \
+              -e "primary_cluster=${PRIMARY_CLUSTER}" \
+              -e "secondary_cluster=${SECONDARY_CLUSTER}"
+        volumeMounts:
+        - name: ansible
+          mountPath: /ansible-cm
+          readOnly: true
+      volumes:
+      - name: ansible
+        configMap:
+          name: regionaldr-ansible
       serviceAccountName: odf-dr-prerequisites-checker

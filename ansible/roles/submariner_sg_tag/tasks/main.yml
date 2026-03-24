@@ -1,0 +1,3 @@
+---
+- name: Tag Submariner security groups on AWS
+  ansible.builtin.script: "{{ role_path }}/files/submariner-sg-tag.sh"

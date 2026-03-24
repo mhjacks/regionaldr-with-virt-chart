@@ -1,0 +1,8 @@
+---
+drpc_namespace: openshift-dr-ops
+drpc_name: gitops-vm-protection
+protected_namespace: gitops-vms
+argocd_app_name: regional-dr
+argocd_app_namespace: ramendr-starter-kit-hub
+drpc_max_attempts: 60
+drpc_retry_delay_seconds: 60

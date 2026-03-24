@@ -35,18 +35,31 @@ spec:
         - /bin/bash
         - -c
         - |
-{{ .Files.Get "scripts/drpc-health-check-argocd-sync-disable.sh" | indent 10 }}
+{{ include "rdr.ansibleBootstrap" . | indent 10 }}
+            ansible-playbook -i inventory/hosts playbooks/drpc_health_check.yml \
+              -e "drpc_namespace=${DRPC_NAMESPACE:-openshift-dr-ops}" \
+              -e "drpc_name=${DRPC_NAME:-gitops-vm-protection}" \
+              -e "argocd_app_name=${ARGOCD_APP_NAME:-regional-dr}" \
+              -e "argocd_app_namespace=${ARGOCD_APP_NAMESPACE}" \
+              -e "protected_namespace=${PROTECTED_NAMESPACE}"
+        volumeMounts:
+        - name: ansible
+          mountPath: /ansible-cm
+          readOnly: true
         env:
         - name: DRPC_NAMESPACE
           value: {{ (index (.Values.drpc | default dict) "namespace") | default "openshift-dr-ops" | quote }}
         - name: DRPC_NAME
           value: {{ (index (.Values.drpc | default dict) "name") | default "gitops-vm-protection" | quote }}
         - name: PROTECTED_NAMESPACE
-          value: "gitops-vms"
+          value: {{ printf "%s-%s" (.Values.global.pattern | default "ramendr-starter-kit-hub") (index (.Values.main | default dict) "clusterGroupName" | default "resilient") | quote }}
         - name: ARGOCD_APP_NAME
           value: "regional-dr"
         - name: ARGOCD_APP_NAMESPACE
-          value: {{ printf "%s-%s" (.Values.global.pattern | default "ramendr-starter-kit-hub") (index (.Values.main | default dict) "clusterGroupName" | default "hub") | quote }}
+          value: {{ printf "%s-%s" (.Values.global.pattern | default "ramendr-starter-kit-hub") (index (.Values.main | default dict) "clusterGroupName" | default "resilient") | quote }}
         - name: KUBECONFIG
           value: ""
-
+      volumes:
+      - name: ansible
+        configMap:
+          name: regionaldr-ansible

@@ -1,0 +1,6 @@
+---
+- name: Run ODF DR prerequisites check
+  ansible.builtin.script: "{{ role_path }}/files/odf-dr-prerequisites-check.sh"
+  environment:
+    PRIMARY_CLUSTER: "{{ primary_cluster }}"
+    SECONDARY_CLUSTER: "{{ secondary_cluster }}"
