@@ -25,7 +25,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: drcluster-validator
-        image: {{ .Values.ansible.containerImage }}
+        image: {{ $.Values.ansible.containerImage }}
         command:
         - /bin/bash
         - -c

@@ -16,7 +16,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: prerequisites-checker
-        image: {{ .Values.ansible.containerImage }}
+        image: {{ $.Values.ansible.containerImage }}
         env:
         - name: PRIMARY_CLUSTER
           value: {{ include "rdr.primaryClusterName" . | quote }}
