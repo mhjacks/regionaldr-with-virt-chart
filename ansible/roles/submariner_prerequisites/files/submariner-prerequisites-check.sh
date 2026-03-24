@@ -1,4 +1,8 @@
 #!/bin/bash
+if [[ -z "${SUBMARINER_PREREQ_LINEBUF:-}" ]] && command -v stdbuf >/dev/null 2>&1; then
+  export SUBMARINER_PREREQ_LINEBUF=1
+  exec stdbuf -oL -eL bash "$0" "$@"
+fi
 set -euo pipefail
 
 echo "Starting Submariner prerequisites check..."
@@ -13,6 +17,20 @@ SLEEP_INTERVAL=60  # 1 minute between checks
 
 # Create kubeconfig directory
 mkdir -p "$KUBECONFIG_DIR"
+
+progress_sleep() {
+  local total=${1:-60}
+  local step=15
+  local elapsed=0
+  echo "⏳ Pausing ${total}s before continuing..."
+  while (( elapsed < total )); do
+    local chunk=$step
+    (( elapsed + chunk > total )) && chunk=$((total - elapsed))
+    sleep "$chunk"
+    elapsed=$((elapsed + chunk))
+    (( elapsed < total )) && echo "   ... ${elapsed}s / ${total}s elapsed (still in wait)"
+  done
+}
 
 # Function to check Submariner health and connectivity
 check_submariner_health() {
@@ -163,7 +181,7 @@ while true; do
       exit 0
     else
       echo "❌ Some Submariner prerequisites are not met. Waiting $SLEEP_INTERVAL seconds before retry..."
-      sleep $SLEEP_INTERVAL
+      progress_sleep "$SLEEP_INTERVAL"
       ((attempt++))
     fi
   done
@@ -179,6 +197,6 @@ while true; do
   echo "🔄 Restarting Submariner prerequisites check..."
   # Reset attempt counter and continue
   attempt=1
-  sleep $SLEEP_INTERVAL
+  progress_sleep "$SLEEP_INTERVAL"
 done  # End of infinite retry loop
 

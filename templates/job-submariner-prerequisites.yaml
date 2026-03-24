@@ -28,11 +28,15 @@ spec:
         - /bin/bash
         - -c
         - |
-{{ include "rdr.ansibleBootstrap" . | indent 10 }}
-            ansible-playbook -i inventory/hosts playbooks/submariner_prerequisites.yml \
-              -e "primary_cluster=${PRIMARY_CLUSTER}" \
-              -e "secondary_cluster=${SECONDARY_CLUSTER}" \
-              -e "submariner_broker_namespace=${SUBMARINER_BROKER_NAMESPACE}"
+{{ include "rdr.ansibleStageOnly" . | indent 10 }}
+            export PRIMARY_CLUSTER SECONDARY_CLUSTER SUBMARINER_BROKER_NAMESPACE
+            SUB_SCRIPT="$STAGE/roles/submariner_prerequisites/files/submariner-prerequisites-check.sh"
+            echo "Running Submariner prerequisites script with line-buffered output (kubectl logs -f will show progress)."
+            if command -v stdbuf >/dev/null 2>&1; then
+              exec stdbuf -oL -eL bash "$SUB_SCRIPT"
+            else
+              exec bash "$SUB_SCRIPT"
+            fi
         volumeMounts:
         - name: ansible
           mountPath: /ansible-cm

@@ -1,4 +1,9 @@
 #!/bin/bash
+# Re-exec with line-buffered stdio so Kubernetes pod logs update during long runs (pipes are fully buffered by default).
+if [[ -z "${ODF_PREREQ_LINEBUF:-}" ]] && command -v stdbuf >/dev/null 2>&1; then
+  export ODF_PREREQ_LINEBUF=1
+  exec stdbuf -oL -eL bash "$0" "$@"
+fi
 set -euo pipefail
 
 echo "Starting ODF DR prerequisites check..."
@@ -13,6 +18,21 @@ SLEEP_INTERVAL=60  # 1 minute between checks
 
 # Create kubeconfig directory
 mkdir -p "$KUBECONFIG_DIR"
+
+# Chunked sleep so kubectl logs -f show progress between attempts (not a single silent minute)
+progress_sleep() {
+  local total=${1:-60}
+  local step=15
+  local elapsed=0
+  echo "⏳ Pausing ${total}s before continuing..."
+  while (( elapsed < total )); do
+    local chunk=$step
+    (( elapsed + chunk > total )) && chunk=$((total - elapsed))
+    sleep "$chunk"
+    elapsed=$((elapsed + chunk))
+    (( elapsed < total )) && echo "   ... ${elapsed}s / ${total}s elapsed (still in wait)"
+  done
+}
 
 # Record failures for end-of-attempt summary (pod logs / Ansible output)
 report_check_failure() {
@@ -504,7 +524,7 @@ while true; do
       echo "══════════════════════════════════════════════════════════════════════"
       echo ""
       echo "❌ Some ODF DR prerequisites are not met. Waiting $SLEEP_INTERVAL seconds before retry..."
-      sleep $SLEEP_INTERVAL
+      progress_sleep "$SLEEP_INTERVAL"
       ((attempt++))
     fi
   done
@@ -520,6 +540,6 @@ while true; do
   echo "🔄 Restarting ODF DR prerequisites check..."
   # Reset attempt counter and continue
   attempt=1
-  sleep $SLEEP_INTERVAL
+  progress_sleep "$SLEEP_INTERVAL"
 done  # End of infinite retry loop
 

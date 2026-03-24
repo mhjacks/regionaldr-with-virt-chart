@@ -26,10 +26,15 @@ spec:
         - /bin/bash
         - -c
         - |
-{{ include "rdr.ansibleBootstrap" . | indent 10 }}
-            ansible-playbook -i inventory/hosts playbooks/odf_dr_prerequisites.yml \
-              -e "primary_cluster=${PRIMARY_CLUSTER}" \
-              -e "secondary_cluster=${SECONDARY_CLUSTER}"
+{{ include "rdr.ansibleStageOnly" . | indent 10 }}
+            export PRIMARY_CLUSTER SECONDARY_CLUSTER
+            ODF_SCRIPT="$STAGE/roles/odf_dr_prerequisites/files/odf-dr-prerequisites-check.sh"
+            echo "Running ODF prerequisites script with line-buffered output (kubectl logs -f will show progress)."
+            if command -v stdbuf >/dev/null 2>&1; then
+              exec stdbuf -oL -eL bash "$ODF_SCRIPT"
+            else
+              exec bash "$ODF_SCRIPT"
+            fi
         volumeMounts:
         - name: ansible
           mountPath: /ansible-cm
