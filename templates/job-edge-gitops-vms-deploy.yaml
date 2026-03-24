@@ -36,7 +36,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: edge-gitops-vms-deploy
-        image: quay.io/validatedpatterns/utility-container:latest
+        image: {{ .Values.ansible.containerImage }}
         resources:
           requests:
             memory: "256Mi"

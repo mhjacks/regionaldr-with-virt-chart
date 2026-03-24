@@ -70,6 +70,9 @@ drpc:
           - storage
   preferredCluster: ocp-primary  # default; override in values-cluster-names or values
 
+ansible:
+  containerImage: quay.io/validatedpatterns/utility-container:latest
+
 regionalDR:
   - name: resilient # Matches with ClusterSet
     globalnetEnabled: false # Support for overlapping CIDR

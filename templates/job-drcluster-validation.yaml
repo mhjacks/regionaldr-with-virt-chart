@@ -25,7 +25,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: drcluster-validator
-        image: quay.io/validatedpatterns/utility-container:latest
+        image: {{ .Values.ansible.containerImage }}
         command:
         - /bin/bash
         - -c

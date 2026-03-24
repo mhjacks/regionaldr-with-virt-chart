@@ -23,7 +23,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: drpc-health-checker
-        image: quay.io/validatedpatterns/utlity-container:latest
+        image: {{ .Values.ansible.containerImage }}
         resources:
           requests:
             memory: "128Mi"

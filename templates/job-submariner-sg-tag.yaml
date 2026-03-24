@@ -16,7 +16,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: sg-tagger
-        image: quay.io/validatedpatterns/utility-container:latest
+        image: {{ .Values.ansible.containerImage }}
         env:
         - name: AWS_SDK_LOAD_CONFIG
           value: "false"
