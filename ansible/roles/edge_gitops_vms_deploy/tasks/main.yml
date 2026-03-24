@@ -12,8 +12,31 @@
     remote_src: true
 
 - name: Run Edge GitOps VMs deployment script
-  ansible.builtin.script: "{{ role_path }}/files/edge-gitops-vms-deploy.sh"
+  ansible.builtin.command:
+    argv:
+      - bash
+      - "{{ role_path }}/files/edge-gitops-vms-deploy.sh"
   environment:
     PRIMARY_CLUSTER: "{{ primary_cluster }}"
     SECONDARY_CLUSTER: "{{ secondary_cluster }}"
     HELM_CHART_VERSION: "{{ helm_chart_version }}"
+  register: edge_gitops_deploy
+  changed_when: false
+  failed_when: false
+
+- name: Promote Edge GitOps deploy script failure to Ansible output
+  ansible.builtin.debug:
+    msg: |-
+      edge-gitops-vms-deploy.sh exited with rc={{ edge_gitops_deploy.rc }}.
+      ========== stderr ==========
+      {{ edge_gitops_deploy.stderr | default('', true) }}
+      ========== stdout (full) ==========
+      {{ edge_gitops_deploy.stdout | default('', true) }}
+  when: edge_gitops_deploy.rc != 0
+
+- name: Fail play when Edge GitOps deploy failed
+  ansible.builtin.fail:
+    msg: >-
+      Edge GitOps VMs deploy script exited with rc={{ edge_gitops_deploy.rc }}.
+      Full stdout/stderr were printed in the previous debug task.
+  when: edge_gitops_deploy.rc != 0
