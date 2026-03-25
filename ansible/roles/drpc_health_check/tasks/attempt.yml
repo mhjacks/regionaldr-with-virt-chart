@@ -28,192 +28,203 @@
         drpc_phase: "{{ (drpc_get.stdout | from_json).status.phase | default('', true) }}"
         drpc_conditions: "{{ (drpc_get.stdout | from_json).status.conditions | default([]) }}"
 
-    - name: Detect recipe reconcile failure anywhere in DRPC status (e.g. max attempts exceeded)
-      ansible.builtin.set_fact:
-        drpc_recipe_failure_detected: "{{ (drpc_recipe_failure_phrase | lower) in (drpc_doc | to_json | lower) }}"
-
-    - name: DRPC fully healthy when phase is Deployed
-      ansible.builtin.set_fact:
-        drpc_completely_healthy: "{{ drpc_phase == 'Deployed' }}"
-
-    - name: DRPC age in whole minutes since metadata.creationTimestamp
-      ansible.builtin.command:
-        argv:
-          - python3
-          - -c
-          - |
-            from datetime import datetime, timezone
-            import sys
-            ts = (sys.argv[1] or "").strip()
-            if not ts:
-                print(999999)
-            else:
-                c = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                n = datetime.now(timezone.utc)
-                print(max(0, int((n - c).total_seconds() // 60)))
-          - "{{ drpc_doc.metadata.creationTimestamp | default('', true) }}"
-      register: drpc_age_cmd
-      changed_when: false
-
-    - name: Record DRPC age for recovery window checks
-      ansible.builtin.set_fact:
-        drpc_age_minutes: "{{ drpc_age_cmd.stdout | trim | int }}"
-
-    - name: Decide whether to run recipe failure recovery (phrase + not healthy + within max age)
-      ansible.builtin.set_fact:
-        drpc_recipe_recovery_should_run: >-
-          {{
-            (drpc_recipe_failure_detected | bool)
-            and (drpc_recipe_failure_recovery_enabled | bool)
-            and not (drpc_completely_healthy | bool)
-            and (drpc_age_minutes | int <= drpc_recipe_failure_max_age_minutes | int)
-          }}
-
-    - name: Recover from early DRPC recipe failure — delete, wait, Argo CD sync
-      when: drpc_recipe_recovery_should_run | bool
+    # Healthy = Deployed: stop polling conditions/PVC/objects; only disable Argo CD sync and exit.
+    - name: DRPC Deployed — finish without further status polling
+      when: drpc_phase == 'Deployed'
       block:
-        - name: Run recipe failure recovery
-          ansible.builtin.include_tasks: drpc_recipe_failure_recovery.yml
-        - name: End attempt after recovery so outer loop can re-check recreated DRPC
+        - name: Report DRPC healthy
+          ansible.builtin.debug:
+            msg: >-
+              DRPC {{ drpc_name }}/{{ drpc_namespace }} phase is Deployed — skipping condition/PVC/object checks.
+
+        - name: Disable Argo CD automated sync
+          ansible.builtin.include_tasks: disable_argocd_sync.yml
+
+        - name: Mark DRPC workflow complete
+          ansible.builtin.set_fact:
+            drpc_all_passed: true
+
+    - name: DRPC not yet Deployed — recipe recovery, conditions, PVC, kube objects
+      when: drpc_phase != 'Deployed'
+      block:
+        - name: Detect recipe reconcile failure anywhere in DRPC status (e.g. max attempts exceeded)
+          ansible.builtin.set_fact:
+            drpc_recipe_failure_detected: "{{ (drpc_recipe_failure_phrase | lower) in (drpc_doc | to_json | lower) }}"
+
+        - name: DRPC fully healthy when phase is Deployed
+          ansible.builtin.set_fact:
+            drpc_completely_healthy: "{{ drpc_phase == 'Deployed' }}"
+
+        - name: DRPC age in whole minutes since metadata.creationTimestamp
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -c
+              - |
+                from datetime import datetime, timezone
+                import sys
+                ts = (sys.argv[1] or "").strip()
+                if not ts:
+                    print(999999)
+                else:
+                    c = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    n = datetime.now(timezone.utc)
+                    print(max(0, int((n - c).total_seconds() // 60)))
+              - "{{ drpc_doc.metadata.creationTimestamp | default('', true) }}"
+          register: drpc_age_cmd
+          changed_when: false
+
+        - name: Record DRPC age for recovery window checks
+          ansible.builtin.set_fact:
+            drpc_age_minutes: "{{ drpc_age_cmd.stdout | trim | int }}"
+
+        - name: Decide whether to run recipe failure recovery (phrase + not healthy + within max age)
+          ansible.builtin.set_fact:
+            drpc_recipe_recovery_should_run: >-
+              {{
+                (drpc_recipe_failure_detected | bool)
+                and (drpc_recipe_failure_recovery_enabled | bool)
+                and not (drpc_completely_healthy | bool)
+                and (drpc_age_minutes | int <= drpc_recipe_failure_max_age_minutes | int)
+              }}
+
+        - name: Recover from early DRPC recipe failure — delete, wait, Argo CD sync
+          when: drpc_recipe_recovery_should_run | bool
+          block:
+            - name: Run recipe failure recovery
+              ansible.builtin.include_tasks: drpc_recipe_failure_recovery.yml
+            - name: End attempt after recovery so outer loop can re-check recreated DRPC
+              ansible.builtin.fail:
+                msg: >-
+                  DRPC recipe failure recovery finished (delete + Argo CD sync). Next attempt will re-fetch DRPC.
+
+        - name: Note recipe failure outside auto-recovery window (enabled but too old to auto-delete)
+          ansible.builtin.debug:
+            msg: >-
+              DRPC shows '{{ drpc_recipe_failure_phrase }}' and is not Deployed; age {{ drpc_age_minutes }}m
+              exceeds {{ drpc_recipe_failure_max_age_minutes }}m — skipping delete/Argo re-sync; continuing checks.
+          when:
+            - drpc_recipe_failure_detected | bool
+            - drpc_recipe_failure_recovery_enabled | bool
+            - not (drpc_recipe_recovery_should_run | bool)
+            - not (drpc_completely_healthy | bool)
+
+        - name: Fail when early recipe failure would recover but automatic recovery is disabled
           ansible.builtin.fail:
             msg: >-
-              DRPC recipe failure recovery finished (delete + Argo CD sync). Next attempt will re-fetch DRPC.
+              DRPC (age {{ drpc_age_minutes }}m <= {{ drpc_recipe_failure_max_age_minutes }}m) contains
+              '{{ drpc_recipe_failure_phrase }}' and is not Deployed, but drpc_recipe_failure_recovery_enabled is false.
+          when:
+            - drpc_recipe_failure_detected | bool
+            - not (drpc_completely_healthy | bool)
+            - drpc_age_minutes | int <= drpc_recipe_failure_max_age_minutes | int
+            - not (drpc_recipe_failure_recovery_enabled | bool)
 
-    - name: Note recipe failure outside auto-recovery window (enabled but too old to auto-delete)
-      ansible.builtin.debug:
-        msg: >-
-          DRPC shows '{{ drpc_recipe_failure_phrase }}' and is not Deployed; age {{ drpc_age_minutes }}m
-          exceeds {{ drpc_recipe_failure_max_age_minutes }}m — skipping delete/Argo re-sync; continuing checks.
-      when:
-        - drpc_recipe_failure_detected | bool
-        - drpc_recipe_failure_recovery_enabled | bool
-        - not (drpc_recipe_recovery_should_run | bool)
-        - not (drpc_completely_healthy | bool)
-
-    - name: Fail when early recipe failure would recover but automatic recovery is disabled
-      ansible.builtin.fail:
-        msg: >-
-          DRPC (age {{ drpc_age_minutes }}m <= {{ drpc_recipe_failure_max_age_minutes }}m) contains
-          '{{ drpc_recipe_failure_phrase }}' and is not Deployed, but drpc_recipe_failure_recovery_enabled is false.
-      when:
-        - drpc_recipe_failure_detected | bool
-        - not (drpc_completely_healthy | bool)
-        - drpc_age_minutes | int <= drpc_recipe_failure_max_age_minutes | int
-        - not (drpc_recipe_failure_recovery_enabled | bool)
-
-    - name: Require DRPC status conditions
-      ansible.builtin.assert:
-        that:
-          - drpc_conditions | length > 0
-        quiet: true
-
-    - name: PVC and kube checks shortcut when Deployed
-      ansible.builtin.set_fact:
-        pvc_check_ok: true
-        k8s_obj_check_ok: true
-      when: drpc_phase == 'Deployed'
-
-    - name: PVC replication check when not Deployed
-      when: drpc_phase != 'Deployed'
-      block:
-        - name: Fail on unhealthy PVC or volume conditions
-          ansible.builtin.fail:
-            msg: "DRPC condition {{ item.type }}={{ item.status }}"
-          when: >-
-            (item.type is defined) and (
-              ('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type)
-            ) and (item.status | default('') in ['False', 'Unhealthy', 'Failed'])
-          loop: "{{ drpc_conditions }}"
-          loop_control:
-            label: "{{ item.type | default('?') }}"
-
-        - name: Accumulate positive PVC signals
-          ansible.builtin.set_fact:
-            pvc_positive: >-
-              {{ pvc_positive | bool or (
-                (item.type is defined) and (
-                  (('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type))
-                  and (item.status | default('') in ['True', 'Healthy', 'Replicating'])
-                )
-              ) }}
-            pvc_rep_hint: >-
-              {{ pvc_rep_hint | bool or (
-                (item.type is defined) and (
-                  (('Replication' in item.type) or ('Replicating' in item.type))
-                  and (item.status | default('') in ['True', 'Healthy'])
-                )
-              ) }}
-          loop: "{{ drpc_conditions }}"
-
-        - name: Fail on PVC-related False condition (second pass)
-          ansible.builtin.fail:
-            msg: "DRPC PVC error {{ item.type }}={{ item.status }}"
-          when: >-
-            (item.status | default('') == 'False') and (item.type is defined) and (
-              ('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type)
-            )
-          loop: "{{ drpc_conditions }}"
-          loop_control:
-            label: "{{ item.type | default('?') }}"
-
-        - name: Require PVC health signal
+        - name: Require DRPC status conditions while not Deployed
           ansible.builtin.assert:
             that:
-              - pvc_positive | bool or pvc_rep_hint | bool
+              - drpc_conditions | length > 0
             quiet: true
 
-    - name: Kubernetes object replication check when not Deployed
-      when: drpc_phase != 'Deployed'
-      block:
-        - name: Fail on unhealthy object-related conditions
-          ansible.builtin.fail:
-            msg: "DRPC kube object condition {{ item.type }}={{ item.status }}"
-          when: >-
-            (item.type is defined) and (
-              ('KubeObject' in item.type) or ('Object' in item.type) or
-              ('Replication' in item.type) or ('Replicating' in item.type) or
-              ('Available' in item.type)
-            ) and (item.status | default('') in ['False', 'Unhealthy', 'Failed'])
-          loop: "{{ drpc_conditions }}"
-          loop_control:
-            label: "{{ item.type | default('?') }}"
+        - name: PVC replication check
+          block:
+            - name: Fail on unhealthy PVC or volume conditions
+              ansible.builtin.fail:
+                msg: "DRPC condition {{ item.type }}={{ item.status }}"
+              when: >-
+                (item.type is defined) and (
+                  ('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type)
+                ) and (item.status | default('') in ['False', 'Unhealthy', 'Failed'])
+              loop: "{{ drpc_conditions }}"
+              loop_control:
+                label: "{{ item.type | default('?') }}"
 
-        - name: Accumulate positive kube object signals
-          ansible.builtin.set_fact:
-            kube_obj_positive: >-
-              {{ kube_obj_positive | bool or (
+            - name: Accumulate positive PVC signals
+              ansible.builtin.set_fact:
+                pvc_positive: >-
+                  {{ pvc_positive | bool or (
+                    (item.type is defined) and (
+                      (('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type))
+                      and (item.status | default('') in ['True', 'Healthy', 'Replicating'])
+                    )
+                  ) }}
+                pvc_rep_hint: >-
+                  {{ pvc_rep_hint | bool or (
+                    (item.type is defined) and (
+                      (('Replication' in item.type) or ('Replicating' in item.type))
+                      and (item.status | default('') in ['True', 'Healthy'])
+                    )
+                  ) }}
+              loop: "{{ drpc_conditions }}"
+
+            - name: Fail on PVC-related False condition (second pass)
+              ansible.builtin.fail:
+                msg: "DRPC PVC error {{ item.type }}={{ item.status }}"
+              when: >-
+                (item.status | default('') == 'False') and (item.type is defined) and (
+                  ('PVC' in item.type) or ('Volume' in item.type) or ('Storage' in item.type)
+                )
+              loop: "{{ drpc_conditions }}"
+              loop_control:
+                label: "{{ item.type | default('?') }}"
+
+            - name: Require PVC health signal
+              ansible.builtin.assert:
+                that:
+                  - pvc_positive | bool or pvc_rep_hint | bool
+                quiet: true
+
+        - name: Kubernetes object replication check
+          block:
+            - name: Fail on unhealthy object-related conditions
+              ansible.builtin.fail:
+                msg: "DRPC kube object condition {{ item.type }}={{ item.status }}"
+              when: >-
                 (item.type is defined) and (
                   ('KubeObject' in item.type) or ('Object' in item.type) or
                   ('Replication' in item.type) or ('Replicating' in item.type) or
                   ('Available' in item.type)
-                ) and (item.status | default('') in ['True', 'Healthy', 'Replicating'])
-              ) }}
-          loop: "{{ drpc_conditions }}"
+                ) and (item.status | default('') in ['False', 'Unhealthy', 'Failed'])
+              loop: "{{ drpc_conditions }}"
+              loop_control:
+                label: "{{ item.type | default('?') }}"
 
-        - name: Fail on object replication False
-          ansible.builtin.fail:
-            msg: "DRPC object error {{ item.type }}"
-          when: >-
-            (item.status | default('') == 'False') and (item.type is defined) and (
-              ('KubeObject' in item.type) or ('Object' in item.type) or
-              ('Replication' in item.type)
-            )
-          loop: "{{ drpc_conditions }}"
-          loop_control:
-            label: "{{ item.type | default('?') }}"
+            - name: Accumulate positive kube object signals
+              ansible.builtin.set_fact:
+                kube_obj_positive: >-
+                  {{ kube_obj_positive | bool or (
+                    (item.type is defined) and (
+                      ('KubeObject' in item.type) or ('Object' in item.type) or
+                      ('Replication' in item.type) or ('Replicating' in item.type) or
+                      ('Available' in item.type)
+                    ) and (item.status | default('') in ['True', 'Healthy', 'Replicating'])
+                  ) }}
+              loop: "{{ drpc_conditions }}"
 
-        - name: Require kube object health signal
-          ansible.builtin.assert:
-            that:
-              - kube_obj_positive | bool
-            quiet: true
+            - name: Fail on object replication False
+              ansible.builtin.fail:
+                msg: "DRPC object error {{ item.type }}"
+              when: >-
+                (item.status | default('') == 'False') and (item.type is defined) and (
+                  ('KubeObject' in item.type) or ('Object' in item.type) or
+                  ('Replication' in item.type)
+                )
+              loop: "{{ drpc_conditions }}"
+              loop_control:
+                label: "{{ item.type | default('?') }}"
 
-    - name: Disable Argo CD automated sync
-      ansible.builtin.include_tasks: disable_argocd_sync.yml
+            - name: Require kube object health signal
+              ansible.builtin.assert:
+                that:
+                  - kube_obj_positive | bool
+                quiet: true
 
-    - name: Mark DRPC workflow complete
-      ansible.builtin.set_fact:
-        drpc_all_passed: true
+        - name: Disable Argo CD automated sync
+          ansible.builtin.include_tasks: disable_argocd_sync.yml
+
+        - name: Mark DRPC workflow complete
+          ansible.builtin.set_fact:
+            drpc_all_passed: true
 
   rescue:
     - name: Log DRPC attempt failure
