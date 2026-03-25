@@ -10,7 +10,7 @@ main:
 
 # Edge GitOps VMs deployment (script and helm chart)
 edgeGitopsVms:
-  chartVersion: "0.2.10"
+  chartVersion: "0.3.0"
 
 secretStore:
   name: vault-backend
