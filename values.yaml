@@ -79,6 +79,12 @@ drpc:
 ansible:
   containerImage: quay.io/validatedpatterns/utility-container:latest
 
+# Post-sync job odf-ramen-trusted-ca (wave 9): CA from hub cluster-proxy-ca-bundle; waits for Ramen s3StoreProfiles.
+odfRamenTrustedCa:
+  ramenS3WaitSeconds: 3600
+  trustedCaWaitSeconds: 3600
+  pollInterval: 15
+
 regionalDR:
   - name: resilient # Matches with ClusterSet
     globalnetEnabled: false # Support for overlapping CIDR
