@@ -28,18 +28,42 @@
         drpc_phase: "{{ ((drpc_get.stdout | from_json).status.phase | default('', true)) | trim }}"
         drpc_conditions: "{{ (drpc_get.stdout | from_json).status.conditions | default([]) }}"
 
-    - name: Record whether DRPC phase is a terminal healthy state
+    # When phase is unset (some hubs/versions), Ramen still publishes metav1 conditions (e.g. Available, Protected).
+    - name: Record condition-based health when phase alone is inconclusive
       ansible.builtin.set_fact:
-        drpc_is_healthy: "{{ drpc_phase in drpc_healthy_phases }}"
+        drpc_healthy_from_conditions: >-
+          {{
+            (
+              (drpc_conditions | selectattr('type', 'defined') | selectattr('type', 'equalto', 'Available') | list | length > 0)
+              and (((drpc_conditions | selectattr('type', 'equalto', 'Available') | first).status | default('', true)) | string | lower == 'true')
+            )
+            or
+            (
+              (drpc_conditions | selectattr('type', 'defined') | selectattr('type', 'equalto', 'Protected') | list | length > 0)
+              and (((drpc_conditions | selectattr('type', 'equalto', 'Protected') | first).status | default('', true)) | string | lower == 'true')
+            )
+          }}
 
-    # Healthy terminal phase: stop polling conditions/PVC/objects; disable Argo CD sync and exit.
-    - name: DRPC healthy phase — finish without further status polling
+    - name: Record whether DRPC is healthy (phase list and/or hub conditions)
+      ansible.builtin.set_fact:
+        drpc_is_healthy: >-
+          {{
+            (drpc_phase in drpc_healthy_phases)
+            or (
+              ((drpc_phase | default('') | trim | length) == 0)
+              and (drpc_healthy_from_conditions | bool)
+            )
+          }}
+
+    # Healthy: stop polling conditions/PVC/objects; disable Argo CD sync and exit.
+    - name: DRPC healthy — finish without further status polling
       when: drpc_is_healthy | bool
       block:
         - name: Report DRPC healthy
           ansible.builtin.debug:
             msg: >-
-              DRPC {{ drpc_name }}/{{ drpc_namespace }} phase={{ drpc_phase }} (healthy) —
+              DRPC {{ drpc_name }}/{{ drpc_namespace }} phase={{ drpc_phase | default('(empty)', true) }}
+              healthy={{ drpc_is_healthy }} (from_conditions={{ drpc_healthy_from_conditions | default(false) }}) —
               skipping condition/PVC/object checks.
 
         - name: Disable Argo CD automated sync
@@ -48,6 +72,10 @@
         - name: Mark DRPC workflow complete
           ansible.builtin.set_fact:
             drpc_all_passed: true
+
+        # Avoid relying on loop `when` re-evaluation across include_tasks iterations (stops extra attempts).
+        - name: Stop playbook after successful DRPC check
+          ansible.builtin.meta: end_host
 
     - name: DRPC not yet healthy — recipe recovery, conditions, PVC, kube objects
       when: not (drpc_is_healthy | bool)
@@ -230,6 +258,9 @@
         - name: Mark DRPC workflow complete
           ansible.builtin.set_fact:
             drpc_all_passed: true
+
+        - name: Stop playbook after successful DRPC check
+          ansible.builtin.meta: end_host
 
   rescue:
     - name: Log DRPC attempt failure
